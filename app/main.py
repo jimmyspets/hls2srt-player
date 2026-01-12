@@ -724,11 +724,9 @@ async def skip_backward(seconds: float) -> StatusResponse:
 
 @app.get("/jump/from-start/{seconds}", response_model=StatusResponse)
 async def jump_from_start(seconds: float) -> StatusResponse:
-    total_length = 5400.0
-    return await build_dummy_status(current_position=min(seconds, total_length))
+    return await build_dummy_status(current_position=min(seconds, DEFAULT_TOTAL_LENGTH))
 
 
 @app.get("/jump/from-end/{seconds}", response_model=StatusResponse)
 async def jump_from_end(seconds: float) -> StatusResponse:
-    total_length = 5400.0
-    return await build_dummy_status(current_position=max(0.0, total_length - seconds))
+    return await build_dummy_status(current_position=max(0.0, DEFAULT_TOTAL_LENGTH - seconds))
