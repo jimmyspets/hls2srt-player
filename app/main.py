@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, HttpUrl
@@ -9,7 +10,20 @@ from urllib.parse import urljoin
 
 import httpx
 
-app = FastAPI(title="hls2srt-player")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: nothing to do
+    yield
+    # Shutdown: cleanup polling task
+    global CURRENT_POLL_TASK
+    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
+        CURRENT_POLL_TASK.cancel()
+        try:
+            await CURRENT_POLL_TASK
+        except asyncio.CancelledError:
+            pass
+
+app = FastAPI(title="hls2srt-player", lifespan=lifespan)
 
 DEFAULT_HLS_URL = os.getenv(
     "HLS_URL",
