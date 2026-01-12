@@ -41,7 +41,8 @@ All control endpoints return the same status JSON.
   "buffer_length": 3600,
   "total_length": 5400,
   "buffer_status": "ok",
-  "state": "playing"
+  "state": "playing",
+  "hls_url": "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8"
 }
 ```
 
@@ -55,6 +56,10 @@ All control endpoints return the same status JSON.
 - `/skip/backward/{seconds}`
 - `/jump/from-start/{seconds}`
 - `/jump/from-end/{seconds}`
+
+### Stream endpoints (POST)
+
+- `/stream` with JSON body `{"hls_url": "https://.../master.m3u8"}`
 
 ## Docker
 
@@ -86,7 +91,7 @@ API will evolve inside a Docker image that bundles GStreamer and the app.
 ```bash
 docker build -t hls2srt-player .
 docker run --rm -p 8000:8000 -p 9000:9000 \
-  -e HLS_URL="https://example.com/stream.m3u8" \
+  -e HLS_URL="https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8" \
   -e SRT_LISTEN_PORT=9000 \
   -e HTTP_PORT=8000 \
   hls2srt-player

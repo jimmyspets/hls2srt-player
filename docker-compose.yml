@@ -7,7 +7,7 @@ services:
       - "8000:8000"
       - "9000:9000"
     environment:
-      HLS_URL: "https://example.com/stream.m3u8"
+      HLS_URL: "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8"
       HTTP_PORT: "8000"
       SRT_LISTEN_PORT: "9000"
     restart: unless-stopped
