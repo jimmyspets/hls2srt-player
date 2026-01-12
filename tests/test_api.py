@@ -344,4 +344,5 @@ seg-1.ts
     try:
         await task
     except asyncio.CancelledError:
+        # Task cancellation is expected in this test; ignore the exception.
         pass
