@@ -42,7 +42,23 @@ All control endpoints return the same status JSON.
   "total_length": 5400,
   "buffer_status": "ok",
   "state": "playing",
-  "hls_url": "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8"
+  "hls_url": "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8",
+  "variants": [
+    {
+      "bandwidth": 2000000,
+      "resolution": "1280x720",
+      "uri": "https://example.com/variant.m3u8"
+    }
+  ],
+  "audio_tracks": [
+    {
+      "name": "English",
+      "language": "en",
+      "group_id": "audio",
+      "uri": "https://example.com/audio.m3u8",
+      "default": true
+    }
+  ]
 }
 ```
 
@@ -60,6 +76,9 @@ All control endpoints return the same status JSON.
 ### Stream endpoints (POST)
 
 - `/stream` with JSON body `{"hls_url": "https://.../master.m3u8"}`
+  - Parses available variants and audio tracks from the master playlist and
+    includes them in the next status responses.
+- `/stream/clear` clears the active stream and stops background polling.
 
 ## Docker
 

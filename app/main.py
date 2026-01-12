@@ -4,6 +4,10 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, HttpUrl
 import os
+import asyncio
+from urllib.parse import urljoin
+
+import httpx
 
 app = FastAPI(title="hls2srt-player")
 
@@ -12,6 +16,12 @@ DEFAULT_HLS_URL = os.getenv(
     "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8",
 )
 CURRENT_HLS_URL = DEFAULT_HLS_URL
+CURRENT_VARIANTS: list["Variant"] = []
+CURRENT_AUDIO_TRACKS: list["AudioTrack"] = []
+CURRENT_TOTAL_LENGTH = 5400.0
+CURRENT_IS_VOD = True
+CURRENT_MEDIA_URL: str | None = None
+CURRENT_POLL_TASK: asyncio.Task | None = None
 
 
 class StatusResponse(BaseModel):
@@ -21,6 +31,22 @@ class StatusResponse(BaseModel):
     buffer_status: str
     state: str
     hls_url: str
+    variants: list["Variant"]
+    audio_tracks: list["AudioTrack"]
+
+
+class Variant(BaseModel):
+    bandwidth: int | None
+    resolution: str | None
+    uri: str
+
+
+class AudioTrack(BaseModel):
+    name: str | None
+    language: str | None
+    group_id: str | None
+    uri: str | None
+    default: bool | None
 
 
 class HlsUrlRequest(BaseModel):
@@ -31,19 +57,178 @@ def build_dummy_status(
     *,
     current_position: float = 1234.5,
     buffer_length: float = 3600.0,
-    total_length: float = 5400.0,
+    total_length: float | None = None,
     buffer_status: str = "ok",
     state: str = "playing",
     hls_url: str | None = None,
+    variants: list["Variant"] | None = None,
+    audio_tracks: list["AudioTrack"] | None = None,
 ) -> StatusResponse:
     return StatusResponse(
         current_position=current_position,
         buffer_length=buffer_length,
-        total_length=total_length,
+        total_length=total_length if total_length is not None else CURRENT_TOTAL_LENGTH,
         buffer_status=buffer_status,
         state=state,
-        hls_url=hls_url or CURRENT_HLS_URL,
+        hls_url=CURRENT_HLS_URL if hls_url is None else hls_url,
+        variants=variants if variants is not None else CURRENT_VARIANTS,
+        audio_tracks=audio_tracks if audio_tracks is not None else CURRENT_AUDIO_TRACKS,
     )
+
+
+def split_attribute_pairs(raw: str) -> list[str]:
+    pairs = []
+    current = []
+    in_quotes = False
+    for char in raw:
+        if char == "\"":
+            in_quotes = not in_quotes
+            current.append(char)
+            continue
+        if char == "," and not in_quotes:
+            pairs.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    if current:
+        pairs.append("".join(current).strip())
+    return pairs
+
+
+def parse_attribute_list(raw: str) -> dict[str, str]:
+    attributes: dict[str, str] = {}
+    for pair in split_attribute_pairs(raw):
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        value = value.strip()
+        if value.startswith("\"") and value.endswith("\""):
+            value = value[1:-1]
+        attributes[key.strip()] = value
+    return attributes
+
+
+def parse_m3u8(master_text: str, base_url: str) -> tuple[list["Variant"], list["AudioTrack"]]:
+    variants: list[Variant] = []
+    audio_tracks: list[AudioTrack] = []
+    pending_stream_info: dict[str, str] | None = None
+
+    for raw_line in master_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#EXT-X-STREAM-INF:"):
+            attributes = parse_attribute_list(line.split(":", 1)[1])
+            pending_stream_info = attributes
+            continue
+        if line.startswith("#EXT-X-MEDIA:"):
+            attributes = parse_attribute_list(line.split(":", 1)[1])
+            if attributes.get("TYPE") != "AUDIO":
+                continue
+            uri = attributes.get("URI")
+            audio_tracks.append(
+                AudioTrack(
+                    name=attributes.get("NAME"),
+                    language=attributes.get("LANGUAGE"),
+                    group_id=attributes.get("GROUP-ID"),
+                    uri=urljoin(base_url, uri) if uri else None,
+                    default=(attributes.get("DEFAULT") == "YES")
+                    if "DEFAULT" in attributes
+                    else None,
+                )
+            )
+            continue
+        if line.startswith("#"):
+            continue
+        if pending_stream_info is not None:
+            bandwidth = pending_stream_info.get("BANDWIDTH")
+            resolution = pending_stream_info.get("RESOLUTION")
+            variants.append(
+                Variant(
+                    bandwidth=int(bandwidth) if bandwidth and bandwidth.isdigit() else None,
+                    resolution=resolution,
+                    uri=urljoin(base_url, line),
+                )
+            )
+            pending_stream_info = None
+
+    return variants, audio_tracks
+
+
+def parse_media_playlist(text: str) -> tuple[float, bool]:
+    total_length = 0.0
+    is_vod = False
+    playlist_type = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#EXT-X-PLAYLIST-TYPE:"):
+            playlist_type = line.split(":", 1)[1].strip()
+            continue
+        if line.startswith("#EXTINF:"):
+            duration_part = line.split(":", 1)[1].split(",", 1)[0].strip()
+            try:
+                total_length += float(duration_part)
+            except ValueError:
+                continue
+            continue
+        if line.startswith("#EXT-X-ENDLIST"):
+            is_vod = True
+
+    if playlist_type == "VOD":
+        is_vod = True
+
+    return total_length, is_vod
+
+
+async def fetch_m3u8_text(url: str) -> str:
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        response = await client.get(url)
+        response.raise_for_status()
+        return response.text
+
+
+async def load_stream_metadata(
+    url: str,
+) -> tuple[list["Variant"], list["AudioTrack"], float, bool, str | None]:
+    text = await fetch_m3u8_text(url)
+    variants, audio_tracks = parse_m3u8(text, url)
+    media_url = None
+    total_length = CURRENT_TOTAL_LENGTH
+    is_vod = True
+
+    if variants:
+        selected = max(variants, key=lambda variant: variant.bandwidth or 0)
+        media_url = selected.uri
+    else:
+        media_url = url
+
+    if media_url:
+        media_text = await fetch_m3u8_text(media_url)
+        total_length, is_vod = parse_media_playlist(media_text)
+
+    return variants, audio_tracks, total_length, is_vod, media_url
+
+
+async def poll_media_playlist(url: str) -> None:
+    global CURRENT_TOTAL_LENGTH
+    global CURRENT_IS_VOD
+    try:
+        while True:
+            try:
+                media_text = await fetch_m3u8_text(url)
+                total_length, is_vod = parse_media_playlist(media_text)
+                CURRENT_TOTAL_LENGTH = total_length
+                CURRENT_IS_VOD = is_vod
+                if is_vod:
+                    break
+            except httpx.HTTPError:
+                pass
+            await asyncio.sleep(2)
+    except asyncio.CancelledError:
+        return
 
 
 def render_homepage() -> str:
@@ -225,8 +410,9 @@ def render_homepage() -> str:
         </div>
         <div class="grid two-col">
           <input type="text" id="hls-url" value="{DEFAULT_HLS_URL}" />
-          <div class="controls">
+          <div class="controls-row">
             <button type="button" id="set-url">Set stream</button>
+            <button type="button" id="clear-url" class="secondary">Remove stream</button>
           </div>
         </div>
       </section>
@@ -287,6 +473,7 @@ def render_homepage() -> str:
       const statusEl = document.getElementById("status-json");
       const urlInput = document.getElementById("hls-url");
       const setButton = document.getElementById("set-url");
+      const clearButton = document.getElementById("clear-url");
       const jumpButton = document.getElementById("jump-button");
       const jumpSecondsInput = document.getElementById("jump-seconds");
       const jumpFromEndInput = document.getElementById("jump-from-end");
@@ -364,6 +551,17 @@ def render_homepage() -> str:
         }}
       }});
 
+      clearButton.addEventListener("click", async () => {{
+        const response = await fetch("/stream/clear", {{
+          method: "POST",
+        }});
+        if (response.ok) {{
+          const data = await response.json();
+          statusEl.textContent = JSON.stringify(data, null, 2);
+          urlInput.value = "{DEFAULT_HLS_URL}";
+        }}
+      }});
+
       fetchStatus();
       setInterval(fetchStatus, 1000);
     </script>
@@ -385,8 +583,65 @@ async def status() -> StatusResponse:
 @app.post("/stream", response_model=StatusResponse)
 async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
     global CURRENT_HLS_URL
+    global CURRENT_VARIANTS
+    global CURRENT_AUDIO_TRACKS
+    global CURRENT_TOTAL_LENGTH
+    global CURRENT_IS_VOD
+    global CURRENT_MEDIA_URL
+    global CURRENT_POLL_TASK
     CURRENT_HLS_URL = str(payload.hls_url)
+    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
+        CURRENT_POLL_TASK.cancel()
+    try:
+        variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(
+            CURRENT_HLS_URL
+        )
+    except (httpx.HTTPError, ValueError):
+        variants = []
+        audio_tracks = []
+        total_length = CURRENT_TOTAL_LENGTH
+        is_vod = True
+        media_url = None
+    CURRENT_VARIANTS = variants
+    CURRENT_AUDIO_TRACKS = audio_tracks
+    CURRENT_TOTAL_LENGTH = total_length
+    CURRENT_IS_VOD = is_vod
+    CURRENT_MEDIA_URL = media_url
+    if not is_vod and media_url:
+        CURRENT_POLL_TASK = asyncio.create_task(poll_media_playlist(media_url))
     return build_dummy_status()
+
+
+@app.post("/stream/clear", response_model=StatusResponse)
+async def clear_stream() -> StatusResponse:
+    global CURRENT_HLS_URL
+    global CURRENT_VARIANTS
+    global CURRENT_AUDIO_TRACKS
+    global CURRENT_TOTAL_LENGTH
+    global CURRENT_IS_VOD
+    global CURRENT_MEDIA_URL
+    global CURRENT_POLL_TASK
+
+    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
+        CURRENT_POLL_TASK.cancel()
+
+    CURRENT_HLS_URL = ""
+    CURRENT_VARIANTS = []
+    CURRENT_AUDIO_TRACKS = []
+    CURRENT_TOTAL_LENGTH = 0.0
+    CURRENT_IS_VOD = True
+    CURRENT_MEDIA_URL = None
+
+    return build_dummy_status(
+        current_position=0.0,
+        buffer_length=0.0,
+        total_length=0.0,
+        buffer_status="empty",
+        state="stopped",
+        hls_url="",
+        variants=[],
+        audio_tracks=[],
+    )
 
 
 @app.get("/play", response_model=StatusResponse)
