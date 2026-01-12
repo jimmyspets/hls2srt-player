@@ -73,8 +73,8 @@ Exposed ports:
 
 ## Getting started
 
-This repo currently contains documentation only. The runtime and API are
-expected to live inside a Docker image that bundles GStreamer and the app.
+This repo now includes a minimal FastAPI app stub and tests. The runtime and
+API will evolve inside a Docker image that bundles GStreamer and the app.
 
 ### Prerequisites
 
@@ -97,6 +97,30 @@ Or with Docker Compose:
 ```bash
 docker compose up --build
 ```
+
+### Local development (current)
+
+```bash
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
+
+Note: When working inside the Docker/Dev Container environment, do not create
+or use a `.venv`; install dependencies directly in the container.
+
+Visit `http://localhost:8000/` for a hello page and `/status` for dummy data.
+
+### Tests (current)
+
+```bash
+pytest
+```
+
+### Project layout (current)
+
+- `app/`: FastAPI app stub (`/` and `/status`)
+- `tests/`: API tests
+- `requirements.txt`: Python dependencies (runtime + tests)
 
 ### GStreamer installation (Docker)
 

@@ -20,5 +20,11 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Placeholder: application code will be added later.
-CMD ["bash", "-lc", "echo 'hls2srt-player image built. App not added yet.' && sleep infinity"]
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY app /app/app
+
+EXPOSE 8000 9000
+
+CMD ["bash", "-lc", "uvicorn app.main:app --host 0.0.0.0 --port ${HTTP_PORT:-8000}"]
