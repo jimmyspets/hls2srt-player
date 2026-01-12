@@ -608,9 +608,8 @@ async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
     global CURRENT_MEDIA_URL
     global CURRENT_POLL_TASK
     CURRENT_HLS_URL = str(payload.hls_url)
-    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
-        CURRENT_POLL_TASK.cancel()
-        CURRENT_POLL_TASK = None
+    await cancel_poll_task()
+    CURRENT_POLL_TASK = None
     try:
         variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(
             CURRENT_HLS_URL
