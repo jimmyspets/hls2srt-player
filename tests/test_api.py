@@ -6,7 +6,7 @@ from app.main import app, DEFAULT_HLS_URL
 
 
 @pytest.fixture(autouse=True)
-def reset_hls_url() -> None:
+async def reset_hls_url() -> None:
     main_module.CURRENT_HLS_URL = DEFAULT_HLS_URL
     main_module.CURRENT_VARIANTS = []
     main_module.CURRENT_AUDIO_TRACKS = []
@@ -15,6 +15,10 @@ def reset_hls_url() -> None:
     main_module.CURRENT_MEDIA_URL = None
     if main_module.CURRENT_POLL_TASK and not main_module.CURRENT_POLL_TASK.done():
         main_module.CURRENT_POLL_TASK.cancel()
+        try:
+            await main_module.CURRENT_POLL_TASK
+        except Exception:
+            pass
 
 
 @pytest.mark.anyio
