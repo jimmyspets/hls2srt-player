@@ -608,6 +608,10 @@ async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
     CURRENT_HLS_URL = str(payload.hls_url)
     if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
         CURRENT_POLL_TASK.cancel()
+        try:
+            await CURRENT_POLL_TASK
+        except asyncio.CancelledError:
+            pass
     try:
         variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(
             CURRENT_HLS_URL
@@ -640,6 +644,10 @@ async def clear_stream() -> StatusResponse:
 
     if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
         CURRENT_POLL_TASK.cancel()
+        try:
+            await CURRENT_POLL_TASK
+        except asyncio.CancelledError:
+            pass
 
     CURRENT_HLS_URL = ""
     CURRENT_VARIANTS = []
