@@ -130,6 +130,9 @@ Visit `http://localhost:8000/` for a hello page and `/status` for dummy data.
 pytest
 ```
 
+`pytest` now runs with coverage enabled for the `app` package and prints a
+terminal summary.
+
 Or use the test script:
 
 ```bash
