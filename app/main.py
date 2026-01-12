@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
             await CURRENT_POLL_TASK
         except asyncio.CancelledError:
             pass
+        CURRENT_POLL_TASK = None
 
 
 app = FastAPI(title="hls2srt-player", lifespan=lifespan)
@@ -612,6 +613,7 @@ async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
             await CURRENT_POLL_TASK
         except asyncio.CancelledError:
             pass
+        CURRENT_POLL_TASK = None
     try:
         variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(
             CURRENT_HLS_URL
@@ -648,6 +650,7 @@ async def clear_stream() -> StatusResponse:
             await CURRENT_POLL_TASK
         except asyncio.CancelledError:
             pass
+        CURRENT_POLL_TASK = None
 
     CURRENT_HLS_URL = ""
     CURRENT_VARIANTS = []
