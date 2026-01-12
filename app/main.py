@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, HttpUrl
@@ -9,7 +10,14 @@ from urllib.parse import urljoin
 
 import httpx
 
-app = FastAPI(title="hls2srt-player")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: nothing to do
+    yield
+    # Shutdown: cleanup polling task
+    await cancel_poll_task()
+
+app = FastAPI(title="hls2srt-player", lifespan=lifespan)
 
 DEFAULT_HLS_URL = os.getenv(
     "HLS_URL",
@@ -229,6 +237,17 @@ async def poll_media_playlist(url: str) -> None:
             await asyncio.sleep(2)
     except asyncio.CancelledError:
         return
+
+
+async def cancel_poll_task() -> None:
+    global CURRENT_POLL_TASK
+    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
+        CURRENT_POLL_TASK.cancel()
+        try:
+            await CURRENT_POLL_TASK
+        except asyncio.CancelledError:
+            pass
+    CURRENT_POLL_TASK = None
 
 
 def render_homepage() -> str:
@@ -590,9 +609,7 @@ async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
     global CURRENT_MEDIA_URL
     global CURRENT_POLL_TASK
     CURRENT_HLS_URL = str(payload.hls_url)
-    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
-        CURRENT_POLL_TASK.cancel()
-        CURRENT_POLL_TASK = None
+    await cancel_poll_task()
     try:
         variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(
             CURRENT_HLS_URL
@@ -623,10 +640,7 @@ async def clear_stream() -> StatusResponse:
     global CURRENT_MEDIA_URL
     global CURRENT_POLL_TASK
 
-    if CURRENT_POLL_TASK:
-        if not CURRENT_POLL_TASK.done():
-            CURRENT_POLL_TASK.cancel()
-        CURRENT_POLL_TASK = None
+    await cancel_poll_task()
 
     CURRENT_HLS_URL = ""
     CURRENT_VARIANTS = []
