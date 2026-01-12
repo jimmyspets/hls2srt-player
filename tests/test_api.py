@@ -9,10 +9,15 @@ from app.main import app, DEFAULT_HLS_URL
 def reset_hls_url() -> None:
     # First clear any existing poll task safely
     main_module.stream_state.clear()
-    # Then set the default HLS URL and values
+    # Then set the default HLS URL and values for consistent baseline
     main_module.stream_state.update(
         hls_url=DEFAULT_HLS_URL,
+        variants=[],
+        audio_tracks=[],
         total_length=5400.0,
+        is_vod=True,
+        media_url=None,
+        poll_task=None,
     )
 
 

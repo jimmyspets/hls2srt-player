@@ -7,6 +7,7 @@ import os
 import asyncio
 from urllib.parse import urljoin
 from threading import Lock
+from typing import cast, Any
 
 import httpx
 
@@ -59,20 +60,24 @@ class StreamState:
     ) -> None:
         """Update state fields atomically."""
         with self._lock:
+            # Cancel existing poll task if we're setting a new one
+            if poll_task is not self._UNSET and self.poll_task and not self.poll_task.done():
+                self.poll_task.cancel()
+            
             if hls_url is not self._UNSET:
-                self.hls_url = hls_url
+                self.hls_url = cast(str, hls_url)
             if variants is not self._UNSET:
-                self.variants = variants
+                self.variants = cast(list["Variant"], variants)
             if audio_tracks is not self._UNSET:
-                self.audio_tracks = audio_tracks
+                self.audio_tracks = cast(list["AudioTrack"], audio_tracks)
             if total_length is not self._UNSET:
-                self.total_length = total_length
+                self.total_length = cast(float, total_length)
             if is_vod is not self._UNSET:
-                self.is_vod = is_vod
+                self.is_vod = cast(bool, is_vod)
             if media_url is not self._UNSET:
-                self.media_url = media_url
+                self.media_url = cast(str | None, media_url)
             if poll_task is not self._UNSET:
-                self.poll_task = poll_task
+                self.poll_task = cast(asyncio.Task | None, poll_task)
 
     def clear(self) -> None:
         """Reset state to empty values."""
@@ -648,11 +653,9 @@ async def status() -> StatusResponse:
 
 @app.post("/stream", response_model=StatusResponse)
 async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
-    snapshot = stream_state.get_snapshot()
-    if snapshot["poll_task"] and not snapshot["poll_task"].done():
-        snapshot["poll_task"].cancel()
-    
     url = str(payload.hls_url)
+    snapshot = stream_state.get_snapshot()
+    
     try:
         variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(url)
     except (httpx.HTTPError, ValueError):
