@@ -622,8 +622,10 @@ async def clear_stream() -> StatusResponse:
     global CURRENT_MEDIA_URL
     global CURRENT_POLL_TASK
 
-    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
-        CURRENT_POLL_TASK.cancel()
+    if CURRENT_POLL_TASK:
+        if not CURRENT_POLL_TASK.done():
+            CURRENT_POLL_TASK.cancel()
+        CURRENT_POLL_TASK = None
 
     CURRENT_HLS_URL = ""
     CURRENT_VARIANTS = []
