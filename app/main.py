@@ -15,13 +15,101 @@ DEFAULT_HLS_URL = os.getenv(
     "HLS_URL",
     "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8",
 )
-CURRENT_HLS_URL = DEFAULT_HLS_URL
-CURRENT_VARIANTS: list["Variant"] = []
-CURRENT_AUDIO_TRACKS: list["AudioTrack"] = []
-CURRENT_TOTAL_LENGTH = 5400.0
-CURRENT_IS_VOD = True
-CURRENT_MEDIA_URL: str | None = None
-CURRENT_POLL_TASK: asyncio.Task | None = None
+
+
+class StreamState:
+    """Thread-safe state management for stream metadata and playback.
+    
+    Uses asyncio.Lock to ensure atomic updates during concurrent request handling.
+    """
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self.hls_url: str = DEFAULT_HLS_URL
+        self.variants: list["Variant"] = []
+        self.audio_tracks: list["AudioTrack"] = []
+        self.total_length: float = 5400.0
+        self.is_vod: bool = True
+        self.media_url: str | None = None
+        self.poll_task: asyncio.Task | None = None
+
+    async def update_stream(
+        self,
+        hls_url: str,
+        variants: list["Variant"],
+        audio_tracks: list["AudioTrack"],
+        total_length: float,
+        is_vod: bool,
+        media_url: str | None,
+    ) -> None:
+        """Update stream metadata atomically."""
+        async with self._lock:
+            # Cancel existing poll task if any
+            if self.poll_task and not self.poll_task.done():
+                self.poll_task.cancel()
+                self.poll_task = None
+
+            self.hls_url = hls_url
+            self.variants = variants
+            self.audio_tracks = audio_tracks
+            self.total_length = total_length
+            self.is_vod = is_vod
+            self.media_url = media_url
+
+            # Start polling for live streams
+            if not is_vod and media_url:
+                self.poll_task = asyncio.create_task(self._poll_media_playlist(media_url))
+
+    async def clear_stream(self) -> None:
+        """Clear all stream metadata atomically."""
+        async with self._lock:
+            if self.poll_task:
+                if not self.poll_task.done():
+                    self.poll_task.cancel()
+                self.poll_task = None
+
+            self.hls_url = ""
+            self.variants = []
+            self.audio_tracks = []
+            self.total_length = 0.0
+            self.is_vod = True
+            self.media_url = None
+
+    async def get_snapshot(self) -> tuple[str, list["Variant"], list["AudioTrack"], float]:
+        """Get a consistent snapshot of current state."""
+        async with self._lock:
+            return (
+                self.hls_url,
+                self.variants.copy(),
+                self.audio_tracks.copy(),
+                self.total_length,
+            )
+
+    async def update_duration(self, total_length: float, is_vod: bool) -> None:
+        """Update duration information atomically."""
+        async with self._lock:
+            self.total_length = total_length
+            self.is_vod = is_vod
+
+    async def _poll_media_playlist(self, url: str) -> None:
+        """Background task to poll media playlist for live streams."""
+        try:
+            while True:
+                try:
+                    media_text = await fetch_m3u8_text(url)
+                    total_length, is_vod = parse_media_playlist(media_text)
+                    await self.update_duration(total_length, is_vod)
+                    if is_vod:
+                        break
+                except httpx.HTTPError:
+                    pass
+                await asyncio.sleep(2)
+        except asyncio.CancelledError:
+            return
+
+
+# Global state instance
+stream_state = StreamState()
 
 
 class StatusResponse(BaseModel):
@@ -53,7 +141,7 @@ class HlsUrlRequest(BaseModel):
     hls_url: HttpUrl
 
 
-def build_dummy_status(
+async def build_dummy_status(
     *,
     current_position: float = 1234.5,
     buffer_length: float = 3600.0,
@@ -64,15 +152,21 @@ def build_dummy_status(
     variants: list["Variant"] | None = None,
     audio_tracks: list["AudioTrack"] | None = None,
 ) -> StatusResponse:
+    # Get current state snapshot if values not provided
+    if hls_url is None or variants is None or audio_tracks is None or total_length is None:
+        state_hls_url, state_variants, state_audio_tracks, state_total_length = (
+            await stream_state.get_snapshot()
+        )
+    
     return StatusResponse(
         current_position=current_position,
         buffer_length=buffer_length,
-        total_length=total_length if total_length is not None else CURRENT_TOTAL_LENGTH,
+        total_length=total_length if total_length is not None else state_total_length,
         buffer_status=buffer_status,
         state=state,
-        hls_url=CURRENT_HLS_URL if hls_url is None else hls_url,
-        variants=variants if variants is not None else CURRENT_VARIANTS,
-        audio_tracks=audio_tracks if audio_tracks is not None else CURRENT_AUDIO_TRACKS,
+        hls_url=hls_url if hls_url is not None else state_hls_url,
+        variants=variants if variants is not None else state_variants,
+        audio_tracks=audio_tracks if audio_tracks is not None else state_audio_tracks,
     )
 
 
@@ -196,7 +290,7 @@ async def load_stream_metadata(
     text = await fetch_m3u8_text(url)
     variants, audio_tracks = parse_m3u8(text, url)
     media_url = None
-    total_length = CURRENT_TOTAL_LENGTH
+    total_length = 5400.0
     is_vod = True
 
     if variants:
@@ -210,25 +304,6 @@ async def load_stream_metadata(
         total_length, is_vod = parse_media_playlist(media_text)
 
     return variants, audio_tracks, total_length, is_vod, media_url
-
-
-async def poll_media_playlist(url: str) -> None:
-    global CURRENT_TOTAL_LENGTH
-    global CURRENT_IS_VOD
-    try:
-        while True:
-            try:
-                media_text = await fetch_m3u8_text(url)
-                total_length, is_vod = parse_media_playlist(media_text)
-                CURRENT_TOTAL_LENGTH = total_length
-                CURRENT_IS_VOD = is_vod
-                if is_vod:
-                    break
-            except httpx.HTTPError:
-                pass
-            await asyncio.sleep(2)
-    except asyncio.CancelledError:
-        return
 
 
 def render_homepage() -> str:
@@ -577,65 +652,38 @@ async def root() -> str:
 
 @app.get("/status", response_model=StatusResponse)
 async def status() -> StatusResponse:
-    return build_dummy_status()
+    return await build_dummy_status()
 
 
 @app.post("/stream", response_model=StatusResponse)
 async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
-    global CURRENT_HLS_URL
-    global CURRENT_VARIANTS
-    global CURRENT_AUDIO_TRACKS
-    global CURRENT_TOTAL_LENGTH
-    global CURRENT_IS_VOD
-    global CURRENT_MEDIA_URL
-    global CURRENT_POLL_TASK
-    CURRENT_HLS_URL = str(payload.hls_url)
-    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
-        CURRENT_POLL_TASK.cancel()
-        CURRENT_POLL_TASK = None
+    hls_url = str(payload.hls_url)
     try:
         variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(
-            CURRENT_HLS_URL
+            hls_url
         )
     except (httpx.HTTPError, ValueError):
         variants = []
         audio_tracks = []
-        total_length = CURRENT_TOTAL_LENGTH
+        total_length = 5400.0
         is_vod = True
         media_url = None
-    CURRENT_VARIANTS = variants
-    CURRENT_AUDIO_TRACKS = audio_tracks
-    CURRENT_TOTAL_LENGTH = total_length
-    CURRENT_IS_VOD = is_vod
-    CURRENT_MEDIA_URL = media_url
-    if not is_vod and media_url:
-        CURRENT_POLL_TASK = asyncio.create_task(poll_media_playlist(media_url))
-    return build_dummy_status()
+    
+    await stream_state.update_stream(
+        hls_url=hls_url,
+        variants=variants,
+        audio_tracks=audio_tracks,
+        total_length=total_length,
+        is_vod=is_vod,
+        media_url=media_url,
+    )
+    return await build_dummy_status()
 
 
 @app.post("/stream/clear", response_model=StatusResponse)
 async def clear_stream() -> StatusResponse:
-    global CURRENT_HLS_URL
-    global CURRENT_VARIANTS
-    global CURRENT_AUDIO_TRACKS
-    global CURRENT_TOTAL_LENGTH
-    global CURRENT_IS_VOD
-    global CURRENT_MEDIA_URL
-    global CURRENT_POLL_TASK
-
-    if CURRENT_POLL_TASK:
-        if not CURRENT_POLL_TASK.done():
-            CURRENT_POLL_TASK.cancel()
-        CURRENT_POLL_TASK = None
-
-    CURRENT_HLS_URL = ""
-    CURRENT_VARIANTS = []
-    CURRENT_AUDIO_TRACKS = []
-    CURRENT_TOTAL_LENGTH = 0.0
-    CURRENT_IS_VOD = True
-    CURRENT_MEDIA_URL = None
-
-    return build_dummy_status(
+    await stream_state.clear_stream()
+    return await build_dummy_status(
         current_position=0.0,
         buffer_length=0.0,
         total_length=0.0,
@@ -649,38 +697,38 @@ async def clear_stream() -> StatusResponse:
 
 @app.get("/play", response_model=StatusResponse)
 async def play() -> StatusResponse:
-    return build_dummy_status(state="playing")
+    return await build_dummy_status(state="playing")
 
 
 @app.get("/pause", response_model=StatusResponse)
 async def pause() -> StatusResponse:
-    return build_dummy_status(state="paused")
+    return await build_dummy_status(state="paused")
 
 
 @app.get("/stop", response_model=StatusResponse)
 async def stop() -> StatusResponse:
-    return build_dummy_status(state="stopped", current_position=0.0)
+    return await build_dummy_status(state="stopped", current_position=0.0)
 
 
 @app.get("/skip/forward/{seconds}", response_model=StatusResponse)
 async def skip_forward(seconds: float) -> StatusResponse:
     base_position = 1234.5
-    return build_dummy_status(current_position=base_position + seconds)
+    return await build_dummy_status(current_position=base_position + seconds)
 
 
 @app.get("/skip/backward/{seconds}", response_model=StatusResponse)
 async def skip_backward(seconds: float) -> StatusResponse:
     base_position = 1234.5
-    return build_dummy_status(current_position=max(0.0, base_position - seconds))
+    return await build_dummy_status(current_position=max(0.0, base_position - seconds))
 
 
 @app.get("/jump/from-start/{seconds}", response_model=StatusResponse)
 async def jump_from_start(seconds: float) -> StatusResponse:
     total_length = 5400.0
-    return build_dummy_status(current_position=min(seconds, total_length))
+    return await build_dummy_status(current_position=min(seconds, total_length))
 
 
 @app.get("/jump/from-end/{seconds}", response_model=StatusResponse)
 async def jump_from_end(seconds: float) -> StatusResponse:
     total_length = 5400.0
-    return build_dummy_status(current_position=max(0.0, total_length - seconds))
+    return await build_dummy_status(current_position=max(0.0, total_length - seconds))
