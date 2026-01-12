@@ -7,18 +7,12 @@ from app.main import app, DEFAULT_HLS_URL
 
 @pytest.fixture(autouse=True)
 def reset_hls_url() -> None:
-    snapshot = main_module.stream_state.get_snapshot()
-    if snapshot["poll_task"] and not snapshot["poll_task"].done():
-        snapshot["poll_task"].cancel()
-    
+    # First clear any existing poll task safely
+    main_module.stream_state.clear()
+    # Then set the default HLS URL and values
     main_module.stream_state.update(
         hls_url=DEFAULT_HLS_URL,
-        variants=[],
-        audio_tracks=[],
         total_length=5400.0,
-        is_vod=True,
-        media_url=None,
-        poll_task=None,
     )
 
 

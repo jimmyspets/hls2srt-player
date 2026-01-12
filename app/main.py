@@ -20,6 +20,8 @@ DEFAULT_HLS_URL = os.getenv(
 
 class StreamState:
     """Thread-safe container for stream state."""
+    
+    _UNSET = object()
 
     def __init__(self) -> None:
         self._lock = Lock()
@@ -47,29 +49,29 @@ class StreamState:
     def update(
         self,
         *,
-        hls_url: str | None = None,
-        variants: list["Variant"] | None = None,
-        audio_tracks: list["AudioTrack"] | None = None,
-        total_length: float | None = None,
-        is_vod: bool | None = None,
-        media_url: str | None = None,
-        poll_task: asyncio.Task | None = None,
+        hls_url: str | object = _UNSET,
+        variants: list["Variant"] | object = _UNSET,
+        audio_tracks: list["AudioTrack"] | object = _UNSET,
+        total_length: float | object = _UNSET,
+        is_vod: bool | object = _UNSET,
+        media_url: str | None | object = _UNSET,
+        poll_task: asyncio.Task | None | object = _UNSET,
     ) -> None:
         """Update state fields atomically."""
         with self._lock:
-            if hls_url is not None:
+            if hls_url is not self._UNSET:
                 self.hls_url = hls_url
-            if variants is not None:
+            if variants is not self._UNSET:
                 self.variants = variants
-            if audio_tracks is not None:
+            if audio_tracks is not self._UNSET:
                 self.audio_tracks = audio_tracks
-            if total_length is not None:
+            if total_length is not self._UNSET:
                 self.total_length = total_length
-            if is_vod is not None:
+            if is_vod is not self._UNSET:
                 self.is_vod = is_vod
-            if media_url is not None:
+            if media_url is not self._UNSET:
                 self.media_url = media_url
-            if poll_task is not None:
+            if poll_task is not self._UNSET:
                 self.poll_task = poll_task
 
     def clear(self) -> None:
