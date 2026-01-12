@@ -71,6 +71,89 @@ Exposed ports:
 - GStreamer
 - Docker
 
+## Getting started
+
+This repo currently contains documentation only. The runtime and API are
+expected to live inside a Docker image that bundles GStreamer and the app.
+
+### Prerequisites
+
+- Docker 24+ (or compatible)
+- A reachable HLS `.m3u8` URL to test with
+
+### Quick start (once the image exists)
+
+```bash
+docker build -t hls2srt-player .
+docker run --rm -p 8000:8000 -p 9000:9000 \
+  -e HLS_URL="https://example.com/stream.m3u8" \
+  -e SRT_LISTEN_PORT=9000 \
+  -e HTTP_PORT=8000 \
+  hls2srt-player
+```
+
+Or with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+### GStreamer installation (Docker)
+
+The Docker image installs GStreamer and common plugins from Debian packages.
+See `Dockerfile` for the exact list.
+
+### VS Code Dev Container
+
+If you are developing in a Dev Container, `.devcontainer/` is configured to
+build from the main `Dockerfile` so it uses the same GStreamer setup. In VS
+Code:
+
+1. Open the repo.
+2. Run “Dev Containers: Reopen in Container”.
+
+The container will provide a consistent GStreamer runtime for development.
+
+### Configuration (environment)
+
+Planned configuration knobs (subject to change as implementation lands):
+
+- `HLS_URL`: Source HLS `.m3u8` URL (optional if set via API/UI)
+- `HTTP_PORT`: FastAPI port (default `8000`)
+- `SRT_LISTEN_PORT`: SRT output port (default `9000`)
+- `BUFFER_TARGET_SECONDS`: Target buffer size (default `3600`)
+- `HLS_VARIANT`: Variant index or bitrate selector (optional)
+- `AUDIO_TRACK`: Audio track index (optional)
+
+### Development workflow (planned)
+
+The project is intended to run in Docker to ensure GStreamer availability and
+consistent plugin versions. A typical workflow will look like this:
+
+1. Build the image locally.
+2. Run the container with ports exposed.
+3. Use the API or web UI to load a stream and control playback.
+
+Once the code is in place, this section will include:
+
+- `make dev` or `docker compose up` examples
+- Local API docs via `/docs`
+- UI usage notes
+
+### API usage
+
+The FastAPI server exposes control endpoints listed above. Example:
+
+```bash
+curl http://localhost:8000/status
+curl http://localhost:8000/play
+```
+
+### Web UI
+
+The web UI is served from the FastAPI app at `http://localhost:8000/`.
+Use it to input a stream URL, select variants, and monitor buffer status.
+
 ## License
 
 This project is licensed under the MIT License.

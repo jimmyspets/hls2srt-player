@@ -1,9 +1,13 @@
 {
   "name": "hls2srt-player",
   "build": {
-    "dockerfile": "Dockerfile",
+    "dockerfile": "../Dockerfile",
     "context": ".."
   },
+  "workspaceFolder": "/workspaces/hls2srt-player",
+  "mounts": [
+    "source=codex-vscode-server,target=/root/.vscode-server,type=volume"
+  ],
   "customizations": {
     "vscode": {
       "settings": {
@@ -15,6 +19,5 @@
         "ms-python.vscode-pylance"
       ]
     }
-  },
-  "remoteUser": "vscode"
+  }
 }
