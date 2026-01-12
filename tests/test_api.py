@@ -1,3 +1,4 @@
+import asyncio
 import httpx
 import pytest
 
@@ -17,7 +18,7 @@ async def reset_hls_url() -> None:
         main_module.CURRENT_POLL_TASK.cancel()
         try:
             await main_module.CURRENT_POLL_TASK
-        except Exception:
+        except asyncio.CancelledError:
             pass
 
 
