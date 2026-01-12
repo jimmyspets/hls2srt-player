@@ -15,6 +15,7 @@ DEFAULT_HLS_URL = os.getenv(
     "HLS_URL",
     "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8",
 )
+DEFAULT_TOTAL_LENGTH = 5400.0
 
 
 class StreamState:
@@ -28,7 +29,7 @@ class StreamState:
         self.hls_url: str = DEFAULT_HLS_URL
         self.variants: list["Variant"] = []
         self.audio_tracks: list["AudioTrack"] = []
-        self.total_length: float = 5400.0
+        self.total_length: float = DEFAULT_TOTAL_LENGTH
         self.is_vod: bool = True
         self.media_url: str | None = None
         self.poll_task: asyncio.Task | None = None
@@ -152,11 +153,10 @@ async def build_dummy_status(
     variants: list["Variant"] | None = None,
     audio_tracks: list["AudioTrack"] | None = None,
 ) -> StatusResponse:
-    # Get current state snapshot if values not provided
-    if hls_url is None or variants is None or audio_tracks is None or total_length is None:
-        state_hls_url, state_variants, state_audio_tracks, state_total_length = (
-            await stream_state.get_snapshot()
-        )
+    # Get current state snapshot
+    state_hls_url, state_variants, state_audio_tracks, state_total_length = (
+        await stream_state.get_snapshot()
+    )
     
     return StatusResponse(
         current_position=current_position,
@@ -290,7 +290,7 @@ async def load_stream_metadata(
     text = await fetch_m3u8_text(url)
     variants, audio_tracks = parse_m3u8(text, url)
     media_url = None
-    total_length = 5400.0
+    total_length = DEFAULT_TOTAL_LENGTH
     is_vod = True
 
     if variants:
@@ -665,7 +665,7 @@ async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
     except (httpx.HTTPError, ValueError):
         variants = []
         audio_tracks = []
-        total_length = 5400.0
+        total_length = DEFAULT_TOTAL_LENGTH
         is_vod = True
         media_url = None
     

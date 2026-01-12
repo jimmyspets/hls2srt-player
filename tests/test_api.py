@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 import app.main as main_module
-from app.main import app, DEFAULT_HLS_URL
+from app.main import app, DEFAULT_HLS_URL, DEFAULT_TOTAL_LENGTH
 
 
 @pytest.fixture(autouse=True)
@@ -16,7 +16,7 @@ async def reset_stream_state() -> None:
         hls_url=DEFAULT_HLS_URL,
         variants=[],
         audio_tracks=[],
-        total_length=5400.0,
+        total_length=DEFAULT_TOTAL_LENGTH,
         is_vod=True,
         media_url=None,
     )
