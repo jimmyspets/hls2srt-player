@@ -15,13 +15,7 @@ async def lifespan(app: FastAPI):
     # Startup: nothing to do
     yield
     # Shutdown: cleanup polling task
-    global CURRENT_POLL_TASK
-    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
-        CURRENT_POLL_TASK.cancel()
-        try:
-            await CURRENT_POLL_TASK
-        except asyncio.CancelledError:
-            pass
+    await cancel_poll_task()
 
 app = FastAPI(title="hls2srt-player", lifespan=lifespan)
 
@@ -243,6 +237,16 @@ async def poll_media_playlist(url: str) -> None:
             await asyncio.sleep(2)
     except asyncio.CancelledError:
         return
+
+
+async def cancel_poll_task() -> None:
+    global CURRENT_POLL_TASK
+    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
+        CURRENT_POLL_TASK.cancel()
+        try:
+            await CURRENT_POLL_TASK
+        except asyncio.CancelledError:
+            pass
 
 
 def render_homepage() -> str:
@@ -637,10 +641,8 @@ async def clear_stream() -> StatusResponse:
     global CURRENT_MEDIA_URL
     global CURRENT_POLL_TASK
 
-    if CURRENT_POLL_TASK:
-        if not CURRENT_POLL_TASK.done():
-            CURRENT_POLL_TASK.cancel()
-        CURRENT_POLL_TASK = None
+    await cancel_poll_task()
+    CURRENT_POLL_TASK = None
 
     CURRENT_HLS_URL = ""
     CURRENT_VARIANTS = []
