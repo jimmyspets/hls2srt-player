@@ -110,6 +110,15 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+Or use the setup script:
+
+```bash
+./scripts/setup.sh
+```
+
+The setup script installs dependencies from PyPI, so it requires network access
+or a configured Python package mirror.
+
 Note: When working inside the Docker/Dev Container environment, do not create
 or use a `.venv`; install dependencies directly in the container.
 
@@ -119,6 +128,23 @@ Visit `http://localhost:8000/` for a hello page and `/status` for dummy data.
 
 ```bash
 pytest
+```
+
+Or use the test script:
+
+```bash
+./scripts/test.sh
+```
+
+The test script expects dependencies to be installed first via
+`./scripts/setup.sh`.
+
+### Dependency maintenance (current)
+
+If you need to refresh the environment or ensure everything is upgraded, run:
+
+```bash
+./scripts/maintenance.sh
 ```
 
 ### Project layout (current)
