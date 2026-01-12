@@ -7,14 +7,19 @@ from app.main import app, DEFAULT_HLS_URL
 
 @pytest.fixture(autouse=True)
 def reset_hls_url() -> None:
-    main_module.CURRENT_HLS_URL = DEFAULT_HLS_URL
-    main_module.CURRENT_VARIANTS = []
-    main_module.CURRENT_AUDIO_TRACKS = []
-    main_module.CURRENT_TOTAL_LENGTH = 5400.0
-    main_module.CURRENT_IS_VOD = True
-    main_module.CURRENT_MEDIA_URL = None
-    if main_module.CURRENT_POLL_TASK and not main_module.CURRENT_POLL_TASK.done():
-        main_module.CURRENT_POLL_TASK.cancel()
+    snapshot = main_module.stream_state.get_snapshot()
+    if snapshot["poll_task"] and not snapshot["poll_task"].done():
+        snapshot["poll_task"].cancel()
+    
+    main_module.stream_state.update(
+        hls_url=DEFAULT_HLS_URL,
+        variants=[],
+        audio_tracks=[],
+        total_length=5400.0,
+        is_vod=True,
+        media_url=None,
+        poll_task=None,
+    )
 
 
 @pytest.mark.anyio

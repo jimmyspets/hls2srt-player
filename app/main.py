@@ -6,6 +6,7 @@ from pydantic import BaseModel, HttpUrl
 import os
 import asyncio
 from urllib.parse import urljoin
+from threading import Lock
 
 import httpx
 
@@ -15,13 +16,77 @@ DEFAULT_HLS_URL = os.getenv(
     "HLS_URL",
     "https://edge.waoplay.com/live/encoder03/2026-01-12_15.21.54/ori/master.m3u8",
 )
-CURRENT_HLS_URL = DEFAULT_HLS_URL
-CURRENT_VARIANTS: list["Variant"] = []
-CURRENT_AUDIO_TRACKS: list["AudioTrack"] = []
-CURRENT_TOTAL_LENGTH = 5400.0
-CURRENT_IS_VOD = True
-CURRENT_MEDIA_URL: str | None = None
-CURRENT_POLL_TASK: asyncio.Task | None = None
+
+
+class StreamState:
+    """Thread-safe container for stream state."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self.hls_url = DEFAULT_HLS_URL
+        self.variants: list["Variant"] = []
+        self.audio_tracks: list["AudioTrack"] = []
+        self.total_length = 5400.0
+        self.is_vod = True
+        self.media_url: str | None = None
+        self.poll_task: asyncio.Task | None = None
+
+    def get_snapshot(self) -> dict:
+        """Get a consistent snapshot of the state."""
+        with self._lock:
+            return {
+                "hls_url": self.hls_url,
+                "variants": self.variants.copy(),
+                "audio_tracks": self.audio_tracks.copy(),
+                "total_length": self.total_length,
+                "is_vod": self.is_vod,
+                "media_url": self.media_url,
+                "poll_task": self.poll_task,
+            }
+
+    def update(
+        self,
+        *,
+        hls_url: str | None = None,
+        variants: list["Variant"] | None = None,
+        audio_tracks: list["AudioTrack"] | None = None,
+        total_length: float | None = None,
+        is_vod: bool | None = None,
+        media_url: str | None = None,
+        poll_task: asyncio.Task | None = None,
+    ) -> None:
+        """Update state fields atomically."""
+        with self._lock:
+            if hls_url is not None:
+                self.hls_url = hls_url
+            if variants is not None:
+                self.variants = variants
+            if audio_tracks is not None:
+                self.audio_tracks = audio_tracks
+            if total_length is not None:
+                self.total_length = total_length
+            if is_vod is not None:
+                self.is_vod = is_vod
+            if media_url is not None:
+                self.media_url = media_url
+            if poll_task is not None:
+                self.poll_task = poll_task
+
+    def clear(self) -> None:
+        """Reset state to empty values."""
+        with self._lock:
+            if self.poll_task and not self.poll_task.done():
+                self.poll_task.cancel()
+            self.hls_url = ""
+            self.variants = []
+            self.audio_tracks = []
+            self.total_length = 0.0
+            self.is_vod = True
+            self.media_url = None
+            self.poll_task = None
+
+
+stream_state = StreamState()
 
 
 class StatusResponse(BaseModel):
@@ -64,15 +129,16 @@ def build_dummy_status(
     variants: list["Variant"] | None = None,
     audio_tracks: list["AudioTrack"] | None = None,
 ) -> StatusResponse:
+    snapshot = stream_state.get_snapshot()
     return StatusResponse(
         current_position=current_position,
         buffer_length=buffer_length,
-        total_length=total_length if total_length is not None else CURRENT_TOTAL_LENGTH,
+        total_length=total_length if total_length is not None else snapshot["total_length"],
         buffer_status=buffer_status,
         state=state,
-        hls_url=CURRENT_HLS_URL if hls_url is None else hls_url,
-        variants=variants if variants is not None else CURRENT_VARIANTS,
-        audio_tracks=audio_tracks if audio_tracks is not None else CURRENT_AUDIO_TRACKS,
+        hls_url=hls_url if hls_url is not None else snapshot["hls_url"],
+        variants=variants if variants is not None else snapshot["variants"],
+        audio_tracks=audio_tracks if audio_tracks is not None else snapshot["audio_tracks"],
     )
 
 
@@ -196,7 +262,8 @@ async def load_stream_metadata(
     text = await fetch_m3u8_text(url)
     variants, audio_tracks = parse_m3u8(text, url)
     media_url = None
-    total_length = CURRENT_TOTAL_LENGTH
+    snapshot = stream_state.get_snapshot()
+    total_length = snapshot["total_length"]
     is_vod = True
 
     if variants:
@@ -213,15 +280,12 @@ async def load_stream_metadata(
 
 
 async def poll_media_playlist(url: str) -> None:
-    global CURRENT_TOTAL_LENGTH
-    global CURRENT_IS_VOD
     try:
         while True:
             try:
                 media_text = await fetch_m3u8_text(url)
                 total_length, is_vod = parse_media_playlist(media_text)
-                CURRENT_TOTAL_LENGTH = total_length
-                CURRENT_IS_VOD = is_vod
+                stream_state.update(total_length=total_length, is_vod=is_vod)
                 if is_vod:
                     break
             except httpx.HTTPError:
@@ -582,56 +646,40 @@ async def status() -> StatusResponse:
 
 @app.post("/stream", response_model=StatusResponse)
 async def set_stream(payload: HlsUrlRequest) -> StatusResponse:
-    global CURRENT_HLS_URL
-    global CURRENT_VARIANTS
-    global CURRENT_AUDIO_TRACKS
-    global CURRENT_TOTAL_LENGTH
-    global CURRENT_IS_VOD
-    global CURRENT_MEDIA_URL
-    global CURRENT_POLL_TASK
-    CURRENT_HLS_URL = str(payload.hls_url)
-    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
-        CURRENT_POLL_TASK.cancel()
+    snapshot = stream_state.get_snapshot()
+    if snapshot["poll_task"] and not snapshot["poll_task"].done():
+        snapshot["poll_task"].cancel()
+    
+    url = str(payload.hls_url)
     try:
-        variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(
-            CURRENT_HLS_URL
-        )
+        variants, audio_tracks, total_length, is_vod, media_url = await load_stream_metadata(url)
     except (httpx.HTTPError, ValueError):
         variants = []
         audio_tracks = []
-        total_length = CURRENT_TOTAL_LENGTH
+        total_length = snapshot["total_length"]
         is_vod = True
         media_url = None
-    CURRENT_VARIANTS = variants
-    CURRENT_AUDIO_TRACKS = audio_tracks
-    CURRENT_TOTAL_LENGTH = total_length
-    CURRENT_IS_VOD = is_vod
-    CURRENT_MEDIA_URL = media_url
+    
+    poll_task = None
     if not is_vod and media_url:
-        CURRENT_POLL_TASK = asyncio.create_task(poll_media_playlist(media_url))
+        poll_task = asyncio.create_task(poll_media_playlist(media_url))
+    
+    stream_state.update(
+        hls_url=url,
+        variants=variants,
+        audio_tracks=audio_tracks,
+        total_length=total_length,
+        is_vod=is_vod,
+        media_url=media_url,
+        poll_task=poll_task,
+    )
+    
     return build_dummy_status()
 
 
 @app.post("/stream/clear", response_model=StatusResponse)
 async def clear_stream() -> StatusResponse:
-    global CURRENT_HLS_URL
-    global CURRENT_VARIANTS
-    global CURRENT_AUDIO_TRACKS
-    global CURRENT_TOTAL_LENGTH
-    global CURRENT_IS_VOD
-    global CURRENT_MEDIA_URL
-    global CURRENT_POLL_TASK
-
-    if CURRENT_POLL_TASK and not CURRENT_POLL_TASK.done():
-        CURRENT_POLL_TASK.cancel()
-
-    CURRENT_HLS_URL = ""
-    CURRENT_VARIANTS = []
-    CURRENT_AUDIO_TRACKS = []
-    CURRENT_TOTAL_LENGTH = 0.0
-    CURRENT_IS_VOD = True
-    CURRENT_MEDIA_URL = None
-
+    stream_state.clear()
     return build_dummy_status(
         current_position=0.0,
         buffer_length=0.0,
