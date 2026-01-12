@@ -8,22 +8,18 @@ from app.main import app, DEFAULT_HLS_URL
 @pytest.fixture(autouse=True)
 async def reset_stream_state() -> None:
     """Reset stream state between tests."""
-    # Cancel any running poll task
-    if main_module.stream_state.poll_task and not main_module.stream_state.poll_task.done():
-        main_module.stream_state.poll_task.cancel()
-        try:
-            await main_module.stream_state.poll_task
-        except Exception:
-            pass
+    # Use clear_stream to safely cancel any running tasks
+    await main_module.stream_state.clear_stream()
     
-    # Reset state to defaults
-    main_module.stream_state.hls_url = DEFAULT_HLS_URL
-    main_module.stream_state.variants = []
-    main_module.stream_state.audio_tracks = []
-    main_module.stream_state.total_length = 5400.0
-    main_module.stream_state.is_vod = True
-    main_module.stream_state.media_url = None
-    main_module.stream_state.poll_task = None
+    # Reset to default values using update_stream
+    await main_module.stream_state.update_stream(
+        hls_url=DEFAULT_HLS_URL,
+        variants=[],
+        audio_tracks=[],
+        total_length=5400.0,
+        is_vod=True,
+        media_url=None,
+    )
 
 
 @pytest.mark.anyio
